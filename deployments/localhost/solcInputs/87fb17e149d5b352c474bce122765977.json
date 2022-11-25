@@ -1,0 +1,47 @@
+{
+  "language": "Solidity",
+  "sources": {
+    "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.0;\n\ninterface AggregatorV3Interface {\n  function decimals() external view returns (uint8);\n\n  function description() external view returns (string memory);\n\n  function version() external view returns (uint256);\n\n  function getRoundData(uint80 _roundId)\n    external\n    view\n    returns (\n      uint80 roundId,\n      int256 answer,\n      uint256 startedAt,\n      uint256 updatedAt,\n      uint80 answeredInRound\n    );\n\n  function latestRoundData()\n    external\n    view\n    returns (\n      uint80 roundId,\n      int256 answer,\n      uint256 startedAt,\n      uint256 updatedAt,\n      uint80 answeredInRound\n    );\n}\n"
+    },
+    "contracts/errors.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.8;\n\nerror FundMe__NotOwner();\nerror FundMe__CallError();\nerror FundMe__NotEnoughSent();\n"
+    },
+    "contracts/exampleContracts/FunWithStorage.sol": {
+      "content": "// SPDX-License-Identifier: MIT\npragma solidity ^0.8.7;\n\ncontract FunWithStorage {\n    uint256 favoriteNumber; // Stored at slot 0\n    bool someBool; // Stored at slot 1\n    uint256[] myArray; /* Array Length Stored at slot 2,\n    but the objects will be the keccak256(2), since 2 is the storage slot of the array */\n    mapping(uint256 => bool) myMap; /* An empty slot is held at slot 3\n    and the elements will be stored at keccak256(h(k) . p)\n\n    p: The storage slot (aka, 3)\n    k: The key in hex\n    h: Some function based on the type. For uint256, it just pads the hex\n    */\n    uint256 constant NOT_IN_STORAGE = 123;\n    uint256 immutable i_not_in_storage;\n    uint256[] public values = [1, 2, 3, 4, 5, 6, 7, 8];\n\n    constructor() {\n        favoriteNumber = 25; // See stored spot above // SSTORE\n        someBool = true; // See stored spot above // SSTORE\n        myArray.push(222); // SSTORE\n        myMap[0] = true; // SSTORE\n        i_not_in_storage = 321;\n    }\n\n    function doStuff() public view {\n        uint256 newVar = favoriteNumber + 1; // SLOAD\n        bool otherVar = someBool; // SLOAD\n        // ^^ memory variables\n    }\n\n    // abi.encode(0) will return 0x0000000000000000000000000000000000000000000000000000000000000000\n    // keccak256(abi.encode(0)) will return 0x290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563\n    bytes32 public constant startingIndexOfValuesArrayElementsInStorage =\n        keccak256(abi.encode(0));\n\n    function getElementIndexInStorage(\n        uint256 _elementIndex\n    ) public pure returns (bytes32) {\n        return\n            bytes32(\n                uint256(startingIndexOfValuesArrayElementsInStorage) +\n                    _elementIndex\n            );\n    }\n}\n"
+    },
+    "contracts/FundMe.sol": {
+      "content": "// SPDX-License-Identifier: MIT\n\npragma solidity ^0.8.8;\n\nimport \"./PriceConverter.sol\";\nimport \"./errors.sol\";\n\n// error FundMe__NotOwner();\n\n/**\n * @title A contract for crowd funding\n * @author Jesus Porrello\n * @notice This contract is to demo a sample crowd funding\n * @dev This implements price feeds as out Library\n */\ncontract FundMe {\n    // Type declarations\n    using PriceConverter for uint256;\n\n    // State variables\n    uint256 public constant MINIMUMUSD = 50 * 1e18;\n    address[] private s_funders;\n    mapping(address => uint256) private s_addressToAmountFunded;\n    address private immutable i_owner;\n    AggregatorV3Interface private s_priceFeed;\n\n    // Modifiers\n    modifier onlyOwner() {\n        // require(msg.sender == i_owner, \"Not Contract Owner!\");\n        // gas to deploy: 766,827\n\n        if (msg.sender != i_owner) {\n            revert FundMe__NotOwner();\n        }\n        // gas to deploy: 741,763\n        _;\n    }\n\n    constructor(address priceFeedAddress) {\n        i_owner = msg.sender;\n        s_priceFeed = AggregatorV3Interface(priceFeedAddress);\n    }\n\n    receive() external payable {\n        fund();\n    }\n\n    fallback() external payable {\n        fund();\n    }\n\n    /**\n     * @notice This function funds the contract\n     * @dev This implements price feeds as out Library\n     */\n    function fund() public payable {\n        // msg.vaue becomes first parameter for getConversionRate()\n        // require(msg.value.getConversionRate() >= MINIMUMUSD, \"Not enough contribution\");\n        // 716,658\n        if (msg.value.getConversionRate(s_priceFeed) < MINIMUMUSD) {\n            revert FundMe__NotEnoughSent();\n        } // 687,880\n        s_addressToAmountFunded[msg.sender] += msg.value;\n        s_funders.push(msg.sender);\n    }\n\n    /**\n     * @notice This function withdraws all funds in the contract to owner wallet\n     * @dev This implements price feeds as out Library\n     */\n    function withdraw() public onlyOwner {\n        for (\n            uint256 fundersIndex = 0;\n            fundersIndex < s_funders.length;\n            fundersIndex++\n        ) {\n            address funder = s_funders[fundersIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n\n        s_funders = new address[](0);\n\n        // different ways to withdraw\n        // transfer\n        // msg.sender = address\n        // payable(msg.sender) = payable address\n        // reverts if fails\n        // payable(msg.sender).transfer(address(this).balance);\n\n        // send\n        // bool sendSuccess = payable(msg.sender).send(address(this).balance);\n        // require(sendSuccess, \"send error, revert\");\n\n        // call - you can call functions without having ABI\n        // returns two variables dataReturned is array so it needs memory tag\n        // (bool callSuccess, bytes memory dataReturned) = payable(msg.sender).call{ value: address(this).balance }(\"\");\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n\n        // require(callSuccess, \"call error, revert\"); // 741,763\n        if (!callSuccess) {\n            revert FundMe__CallError();\n        } // 716,646\n    }\n\n    function cheaperWithdraw() public payable onlyOwner {\n        address[] memory funders = s_funders;\n        for (\n            uint256 fundersIndex = 0;\n            fundersIndex < funders.length;\n            fundersIndex++\n        ) {\n            address funder = funders[fundersIndex];\n            s_addressToAmountFunded[funder] = 0;\n        }\n\n        s_funders = new address[](0);\n        (bool callSuccess, ) = payable(msg.sender).call{\n            value: address(this).balance\n        }(\"\");\n\n        if (!callSuccess) {\n            revert FundMe__CallError();\n        }\n    }\n\n    function getOwner() public view returns (address) {\n        return i_owner;\n    }\n\n    function getFunder(uint256 index) public view returns (address) {\n        return s_funders[index];\n    }\n\n    function getAddressToAmountFunded(\n        address funder\n    ) public view returns (uint256) {\n        return s_addressToAmountFunded[funder];\n    }\n\n    function getPriceFeed() public view returns (AggregatorV3Interface) {\n        return s_priceFeed;\n    }\n}\n"
+    },
+    "contracts/PriceConverter.sol": {
+      "content": "// SPDX-License-Identifier: MIT\n\npragma solidity ^0.8.8;\n\nimport \"@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol\";\n\nlibrary PriceConverter {\n    function getPrice(\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        // ABI\n        // Address price feed Goerli: 0xD4a33860578De61DBAbDc8BFdb98FD742fA7028e\n        /** \n        function latestRoundData()\n            external\n            view\n            returns (\n            uint80 roundId,\n            int256 answer,\n            uint256 startedAt,\n            uint256 updatedAt,\n            uint80 answeredInRound\n            );\n        **/\n        // AggregatorV3Interface priceFeed = AggregatorV3Interface(\n        //     0xD4a33860578De61DBAbDc8BFdb98FD742fA7028e\n        // );\n        // (uint80 roundId, int256 price, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound) = priceFeed.latestRoundData();\n        (, int256 price, , , ) = priceFeed.latestRoundData();\n        // price has 8 decimals ie. 118751000000 == 1187.51000000\n        return uint256(price * 1e10);\n    }\n\n    function getConversionRate(\n        uint256 _ethAmount,\n        AggregatorV3Interface priceFeed\n    ) internal view returns (uint256) {\n        uint256 ethPrice = getPrice(priceFeed);\n        uint256 ethAmountInUsd = (ethPrice * _ethAmount) / 1e18;\n        return ethAmountInUsd;\n    }\n}\n"
+    }
+  },
+  "settings": {
+    "optimizer": {
+      "enabled": false,
+      "runs": 200
+    },
+    "outputSelection": {
+      "*": {
+        "*": [
+          "abi",
+          "evm.bytecode",
+          "evm.deployedBytecode",
+          "evm.methodIdentifiers",
+          "metadata",
+          "devdoc",
+          "userdoc",
+          "storageLayout",
+          "evm.gasEstimates"
+        ],
+        "": [
+          "ast"
+        ]
+      }
+    },
+    "metadata": {
+      "useLiteralContent": true
+    }
+  }
+}
