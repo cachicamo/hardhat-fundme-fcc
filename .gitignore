@@ -5,6 +5,7 @@ coverage.json
 typechain
 typechain-types
 gas-report.txt
+.DS_Store
 
 #Hardhat files
 cache
